@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>또보게 캐슬콤보 대회 풀리그 실시간 결과</title>
+  <script>
+    // Google Apps Script 웹앱(JSON) URL
+const API_URL = ""; // 예: https://script.google.com/macros/s/AKfycbx.../exec
+const CSV_URL = "results.csv"; // 같은 저장소에 올린 CSV 경로 (예: results.csv)
+    const REFRESH_SEC = 30;
+
+    const norm = s => (s||"").toString().trim().toLowerCase();
+
+    function parseCSV(text){
+      const rows = [];
+      let i=0, field="", row=[]; let inQ=false;
+      const pushField=()=>{ row.push(field); field=""; };
+      const pushRow=()=>{ rows.push(row); row=[]; };
+      while(i<text.length){
+        const c = text[i++];
+        if(inQ){
+          if(c==='"'){
+            if(text[i]==='"'){ field+='"'; i++; } else { inQ=false; }
+          } else field+=c;
+        } else {
+          if(c==='"') inQ=true;
+          else if(c===',') pushField();
+          else if(c==='\n'){ pushField(); pushRow(); }
+          else if(c==='\r'){ }
+          else field+=c;
+        }
+      }
+      if(field.length || row.length){ pushField(); pushRow(); }
+      return rows;
+    }
+
+    function parseMatches(rows){
+      const [header, ...data] = rows.filter(r=>r.length>1);
+      if(!header) return { header:[], matches:[] };
+      const idx = Object.fromEntries(header.map((h,i)=>[norm(h), i]));
+      const matches = data.map(r=>({
+        id: r[idx["match_id"]],
+        date: r[idx["date"]],
+        home: (r[idx["home"]]||"").trim(),
+        away: (r[idx["away"]]||"").trim(),
+        hs: r[idx["home_score"]]!==undefined && r[idx["home_score"]]!=="" ? Number(r[idx["home_score"]]) : null,
+        as: r[idx["away_score"]]!==undefined && r[idx["away_score"]]!=="" ? Number(r[idx["away_score"]]) : null,
+      })).filter(m=>m.home && m.away);
+      return { header, matches };
+    }
+
+    function computeStandings(matches){
+      const teams = new Map();
+      const ensure = name => {
+        if(!teams.has(name)) teams.set(name, {
+          team: name, P:0, W:0, L:0, GF:0, GA:0, GD:0, Pts:0, form: []
+        });
+        return teams.get(name);
+      };
+
+      const PLAYERS = ["근근","깡","다루","디니","라로","로버트","미정","소금","소나","숑숑","승지","아르테","위나","지명","쿠몬","큰환","하늘","작은환","찰리","잼"];
+      PLAYERS.forEach(p=>ensure(p));
+
+      const completed = matches.filter(m=>Number.isFinite(m.hs) && Number.isFinite(m.as));
+      completed.forEach(m=>{
+        const H = ensure(m.home), A = ensure(m.away);
+        if(m.hs===m.as){ return; } // 무승부 제외
+        H.P++; A.P++;
+        H.GF+=m.hs; H.GA+=m.as; H.GD=H.GF-H.GA;
+        A.GF+=m.as; A.GA+=m.hs; A.GD=A.GF-A.GA;
+        if(m.hs>m.as){
+          H.W++; A.L++;
+          H.Pts += 2; // 승 2점
+          A.Pts -= 1; // 패 -1점
+          H.form.push('W'); A.form.push('L');
+        }
+        else {
+          A.W++; H.L++;
+          A.Pts += 2; // 승 2점
+          H.Pts -= 1; // 패 -1점
+          A.form.push('W'); H.form.push('L');
+        }
+        if(H.form.length>5) H.form.shift();
+        if(A.form.length>5) A.form.shift();
+      });
+
+      const arr = Array.from(teams.values());
+arr.sort((a,b)=>{
+  if(b.Pts!==a.Pts) return b.Pts-a.Pts;
+  if(b.W!==a.W) return b.W-a.W;
+  if(b.GD!==a.GD) return b.GD-a.GD;
+  if(b.GF!==a.GF) return b.GF-a.GF;
+  return (a.team.localeCompare(b.team,'ko'));
+});
+
+// 동률 처리: 같은 승점이면 같은 순위
+arr.forEach((t,i)=>{
+  if(i===0){
+    t.Rank = 1;
+  } else {
+    const prev = arr[i-1];
+    if(t.Pts===prev.Pts){
+      t.Rank = prev.Rank;
+    } else {
+      t.Rank = i+1;
+    }
+  }
+});
+
+// 동률 순위(competition ranking: 1,1,3 방식)
+      arr.forEach((t,i)=>{
+        if(i===0){ t.Rank = 1; }
+        else {
+          const prev = arr[i-1];
+          t.Rank = (t.Pts === prev.Pts) ? prev.Rank : (i+1);
+        }
+      });
+      return arr;
+    }
+
+    function groupUpcoming(matches){
+      return matches.filter(m=>!(Number.isFinite(m.hs) && Number.isFinite(m.as)));
+    }
+
+    function el(tag, attrs={}, ...children){
+      const e = document.createElement(tag);
+      for(const [k,v] of Object.entries(attrs)){
+        if(k==="class") e.className = v; else if(k==="html") e.innerHTML = v; else e.setAttribute(k,v);
+      }
+      children.flat().forEach(c=>{ if(c==null)return; if(typeof c=="string"||typeof c=="number") e.appendChild(document.createTextNode(c)); else e.appendChild(c); });
+      return e;
+    }
+    function pill(text,title){
+      const bg = {W:"bg-green-200",L:"bg-red-200"}[text]||"bg-gray-100";
+      return el("span",{class:`inline-flex items-center justify-center text-xs ${bg} rounded px-2 py-0.5`,title},text);
+    }
+
+    function renderStandings(container, standings){
+      container.innerHTML="";
+      const table = el("table",{class:"min-w-full border-separate border-spacing-y-2"});
+      const thead = el("thead",{}, el("tr",{class:"text-sm text-gray-600"},
+        ["순위","선수","경기","승","패","승점","최근5"].map(h=>el("th",{class:"text-left px-3"},h))));
+      const tbody = el("tbody");
+      standings.forEach((t,i)=>{
+        const highlight = t.Rank <= 10; // 동률 포함 상위 10위 강조
+        const row = el("tr", {class: highlight?"bg-white shadow rounded font-bold":"bg-white shadow rounded"},
+          el("td",{class:"px-3 py-2"}, t.Rank),
+          el("td",{class:"px-3 py-2"},t.team),
+          el("td",{class:"px-3 py-2"},t.P),
+          el("td",{class:"px-3 py-2"},t.W),
+          el("td",{class:"px-3 py-2"},t.L),
+          el("td",{class:"px-3 py-2"},t.Pts),
+          el("td",{class:"px-3 py-2"},...t.form.map((r,i2)=>pill(r,`${t.team} 최근 ${i2+1}번째 경기: ${r}`)))
+        );
+        tbody.appendChild(row);
+      });
+      table.appendChild(thead); table.appendChild(tbody);
+      container.appendChild(table);
+    }
+
+    async function loadCSV(){
+      // 1) API_URL이 있으면 우선 사용(JSON 우선 → CSV 폴백)
+      if (API_URL) {
+        const res = await fetch(API_URL, { cache: 'no-store' });
+        if (!res.ok) throw new Error("API 불러오기 실패: " + res.status);
+        const text = await res.text();
+        try {
+          const data = JSON.parse(text);
+          const header = ["match_id","date","home","away","home_score","away_score"];
+          const rows = [header, ...data.map(obj => header.map(h => obj[h]))];
+          return rows;
+        } catch {
+          // JSON이 아니면 CSV로 가정하여 파싱
+          return parseCSV(text);
+        }
+      }
+      // 2) CSV_URL이 지정되어 있으면 해당 CSV 사용
+      if (CSV_URL) {
+        const res = await fetch(CSV_URL, { cache: 'no-store' });
+        if (!res.ok) throw new Error("CSV 불러오기 실패: " + res.status);
+        const text = await res.text();
+        return parseCSV(text);
+      }
+      // 3) 데모 데이터 (백업)
+      const header = ["match_id","date","home","away","home_score","away_score"];
+      const rows = [header, ["1","2025-08-20","근근","깡","2","1"], ["2","2025-08-20","다루","디니","3","0"]];
+      return rows;
+    }
+
+    async function refresh(){
+      const statusEl=document.getElementById('status');
+      try{
+        const rows=await loadCSV();
+        const {matches}=parseMatches(rows);
+        const standings=computeStandings(matches);
+        renderStandings(document.getElementById('standings'),standings);
+        renderRecent10(document.getElementById('recent10'), matches);
+        statusEl.textContent=`업데이트: ${new Date().toLocaleString()}`;
+      }catch(err){ statusEl.textContent='오류: '+err.message; }
+    }
+
+    function renderRecent10(container, matches){
+  container.innerHTML = "";
+  const done = matches.filter(m=>Number.isFinite(m.hs) && Number.isFinite(m.as));
+  done.sort((a,b)=>{
+    const da = new Date(a.date).getTime();
+    const db = new Date(b.date).getTime();
+    if(!isNaN(db-da)) return db-da;
+    return 0;
+  });
+  const recent = done.slice(0,10);
+
+  if(recent.length===0){
+    container.appendChild(el("div", {class:"text-sm text-gray-600"}, "완료된 경기가 없습니다."));
+    return;
+  }
+
+  const toMD = (dstr)=>{
+    const d = new Date(dstr);
+    if(isNaN(d)) return dstr||"날짜 미정";
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const dd = String(d.getDate()).padStart(2,'0');
+    return `${mm}-${dd}`;
+  };
+
+  const grid = el("div", {class:"grid grid-cols-5 gap-2"});
+  recent.forEach(m=>{
+    let winner=null;
+    if(m.hs > m.as) winner = m.home; else if(m.as > m.hs) winner = m.away;
+    const homeStyled = winner===m.home ? `<span class="text-green-600 font-semibold">${m.home}</span>` : m.home;
+    const awayStyled = winner===m.away ? `<span class="text-green-600 font-semibold">${m.away}</span>` : m.away;
+    const displayHTML = `${homeStyled} ${m.hs}:${m.as} ${awayStyled}`;
+
+    const cell = el("div", {class:"bg-white shadow rounded p-2 text-xs text-center"},
+      el("div", {class:"text-[11px] text-gray-500"}, toMD(m.date)),
+      el("div", {class:"mt-1 font-semibold", html: displayHTML})
+    );
+    grid.appendChild(cell);
+  });
+
+  container.appendChild(grid);
+}
+    document.addEventListener('DOMContentLoaded',()=>{
+      refresh(); setInterval(refresh,REFRESH_SEC*1000);
+    });
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-50">
+  <div class="max-w-4xl mx-auto p-4">
+    <h1 class="text-2xl font-bold mb-2">또보게 캐슬콤보 대회 풀리그 실시간 결과</h1>
+    <div id="status" class="text-sm text-gray-600 mb-4">불러오는 중…</div>
+    <div id="standings"></div>
+    <h2 class="text-xl font-semibold mt-8 mb-2">최근 10경기</h2>
+    <div id="recent10"></div>
+    <div class="mt-6 text-xs text-gray-500">데이터 소스: Google Apps Script 웹앱(JSON) 또는 CSV. API_URL에 /exec 주소를 넣으면 자동으로 JSON→CSV 순으로 판별합니다.</div>
+  </div>
+</body>
+</html>
