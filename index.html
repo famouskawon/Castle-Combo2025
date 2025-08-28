@@ -203,7 +203,7 @@
       const table = el("table",{class:"min-w-full border text-xs"});
       const thead = el("thead",{}, el("tr",{},
         el("th",{class:"border px-1 py-0.5"},""),
-        ...PLAYERS.map(p=>el("th",{class:"border px-1 py-0.5 rotate-90"},p))
+        ...PLAYERS.map(p=>el("th",{class:"border px-1 py-0.5 "},p))
       ));
       const tbody = el("tbody");
       PLAYERS.forEach(r=>{
